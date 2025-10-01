@@ -77,9 +77,16 @@ The configuration file should be a JSON file with the following required fields:
 }
 ```
 
+Before running boltzina, you need to run Boltz-2 to create `manifest.json` and `constraints`.
+For example, run the following:
+```bash
+boltz predict sample/CDK2/base.yaml --out_dir sample/CDK2 --use_msa_server
+```
+You need to specify the output directory `sample/CDK2/boltz_results_base` as `work_dir`.
+
 ### Configuration Parameters
 
-- **`work_dir`**: Working directory for intermediate files
+- **`work_dir`**: You need to specify the output directory of Boltz-2.
 - **`vina_config`**: Path to AutoDock Vina configuration file (contains binding site coordinates)
 - **`fname`**: Base filename for output files
 - **`input_ligand_name`**: Name of the ligand in the input files
