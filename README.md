@@ -95,4 +95,4 @@ You need to specify the output directory `sample/CDK2/boltz_results_base` as `wo
 - **`ligand_files`**: Array of paths to ligand files (Now only supports PDB format)
 
 ## Reference
-Furui K, Ohue M. Boltzina: Efficient and Accurate Virtual Screening via Docking-Guided Binding Prediction with Boltz-2, arXiv (preprint) 2025. https://doi.org/10.48550/arXiv.2508.17555
+Furui, K, & Ohue, M. Boltzina: Efficient and Accurate Virtual Screening via Docking-Guided Binding Prediction with Boltz-2. AI for Accelerated Materials Design - NeurIPS 2025. https://openreview.net/forum?id=OwtEQsd2hN
