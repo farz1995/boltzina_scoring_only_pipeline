@@ -32,6 +32,7 @@ def main():
     fname = config_dict["fname"]
     seed = args.seed if config_dict.get("seed", None) is None else config_dict["seed"]
     float32_matmul_precision = config_dict.get("float32_matmul_precision", args.float32_matmul_precision)
+    ligand_chain_id = config_dict.get("ligand_chain_id", "B")
     scoring_only = config_dict.get("scoring_only", False)
     prepared_mols_file = config_dict.get("prepared_mols_file", None)
     predict_affinity_args = config_dict.get("predict_affinity_args", None)
@@ -60,6 +61,7 @@ def main():
         vina_cpu=args.vina_cpu,
         batch_size=args.batch_size,
         float32_matmul_precision=float32_matmul_precision,
+        ligand_chain_id=ligand_chain_id,
         scoring_only=scoring_only,
         prepared_mols_file=prepared_mols_file,
         use_kernels=args.use_kernels,

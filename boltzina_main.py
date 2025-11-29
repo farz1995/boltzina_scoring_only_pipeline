@@ -36,6 +36,7 @@ class Boltzina:
         boltz_override: bool = False,
         input_ligand_name: str = "MOL",
         base_ligand_name: str = "MOL",
+        ligand_chain_id: str = "B",
         fname: Optional[str] = None,
         float32_matmul_precision: str = "highest",
         scoring_only: bool = False,
@@ -65,6 +66,7 @@ class Boltzina:
         self.pose_idxs = [str(pose_idx) for pose_idx in range(1, self.num_boltz_poses + 1)]
         self.input_ligand_name = input_ligand_name
         self.base_ligand_name = base_ligand_name
+        self.ligand_chain_id = ligand_chain_id
         self.float32_matmul_precision = float32_matmul_precision
         self.scoring_only = scoring_only
         self.skip_docking = skip_docking
@@ -203,7 +205,7 @@ class Boltzina:
             ligand_output_dir = self.output_dir / "out" / str(idx)
             docked_ligands_dir = ligand_output_dir / "docked_ligands"
             for pose_idx in self.pose_idxs:
-                complex_file = docked_ligands_dir / f"docked_ligand_{pose_idx}_B_complex_fix.cif"
+                complex_file = docked_ligands_dir / f"docked_ligand_{pose_idx}_{self.ligand_chain_id}_complex_fix.cif"
                 fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
                 affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"affinity_{fname}.json"
                 pre_affinity_file = self.output_dir / "boltz_out" / "predictions" / fname / f"pre_affinity_{fname}.npz"
@@ -331,7 +333,7 @@ class Boltzina:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
         docked_ligands_dir.mkdir(exist_ok=True)
         complex_fix_cifs = [
-            docked_ligands_dir / f"docked_ligand_{pose_idx}_B_complex_fix.cif"
+            docked_ligands_dir / f"docked_ligand_{pose_idx}_{self.ligand_chain_id}_complex_fix.cif"
             for pose_idx in self.pose_idxs
         ]
 
@@ -364,18 +366,18 @@ class Boltzina:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
         docked_ligands_dir.mkdir(exist_ok=True)
         prep_file = docked_ligands_dir / f"{base_name}_prep.pdb"
-        complex_file = docked_ligands_dir / f"{base_name}_B_complex.pdb"
-        complex_cif = docked_ligands_dir / f"{base_name}_B_complex.cif"
-        complex_fix_cif = docked_ligands_dir / f"{base_name}_B_complex_fix.cif"
+        complex_file = docked_ligands_dir / f"{base_name}_{self.ligand_chain_id}_complex.pdb"
+        complex_cif = docked_ligands_dir / f"{base_name}_{self.ligand_chain_id}_complex.cif"
+        complex_fix_cif = docked_ligands_dir / f"{base_name}_{self.ligand_chain_id}_complex_fix.cif"
         if complex_fix_cif.exists() and not self.vina_override:
             return
         # Process with pdb_chain and pdb_rplresname
         try:
             if self.input_ligand_name != self.base_ligand_name:
-                cmd1 = f"pdb_chain -B {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
+                cmd1 = f"pdb_chain -{self.ligand_chain_id} {pdb_file} | pdb_rplresname -\"{self.input_ligand_name}\":{self.base_ligand_name} | pdb_tidy > {prep_file}"
                 subprocess.run(cmd1, shell=True, check=True)
             else:
-                cmd1 = f"pdb_chain -B {pdb_file} | pdb_tidy > {prep_file}"
+                cmd1 = f"pdb_chain -{self.ligand_chain_id} {pdb_file} | pdb_tidy > {prep_file}"
                 subprocess.run(cmd1, shell=True, check=True)
 
             if not prep_file.exists():
@@ -588,7 +590,7 @@ class Boltzina:
         docked_ligands_dir = ligand_output_dir / "docked_ligands"
         if docked_ligands_dir.exists():
             for file_path in docked_ligands_dir.iterdir():
-                if not file_path.name.endswith("_B_complex_fix.cif"):
+                if not file_path.name.endswith(f"_{self.ligand_chain_id}_complex_fix.cif"):
                     if file_path.is_file():
                         file_path.unlink()
                     elif file_path.is_dir():
@@ -717,7 +719,7 @@ class Boltzina:
             ligand_path = Path(pdb_file)
             base_name = ligand_path.stem
             ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
-            complex_file = ligand_output_dir / "docked_ligands" / f"{base_name}_B_complex_fix.cif"
+            complex_file = ligand_output_dir / "docked_ligands" / f"{base_name}_{self.ligand_chain_id}_complex_fix.cif"
 
             for pose_idx in self.pose_idxs:
                 fname = f"{self.fname}_{ligand_output_dir.stem}_{pose_idx}"
