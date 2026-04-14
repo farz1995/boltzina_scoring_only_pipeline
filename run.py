@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--skip_trunk_and_structure", action="store_true", help="Skip running trunk and structure")
     parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
+    parser.add_argument("--docking_engine", type=str, default=None, choices=["vina", "unidock2"], help="Docking engine (overrides config)")
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config_dict = json.load(f)
@@ -41,10 +42,12 @@ def main():
     steering_args = config_dict.get("steering_args", None)
     diffusion_process_args = config_dict.get("diffusion_process_args", None)
     run_trunk_and_structure = not args.skip_trunk_and_structure
+    docking_engine = args.docking_engine if args.docking_engine else config_dict.get("docking_engine", "vina")
+    unidock2_config = config_dict.get("unidock2_config", None)
     print("--------------------------------")
     print(f"Output directory: {output_dir}")
     print(f"Seed: {seed}")
-    print(f"Mode: {'scoring only' if scoring_only else 'docking'}")
+    print(f"Mode: {'scoring only' if scoring_only else f'docking ({docking_engine})'}")
     print(f"Using float32 matmul precision: {float32_matmul_precision}")
 
     boltzina = Boltzina(
@@ -72,7 +75,9 @@ def main():
         diffusion_process_args=diffusion_process_args,
         skip_docking = args.skip_docking,
         run_trunk_and_structure = run_trunk_and_structure,
-        clean_intermediate_files = not args.keep_intermediate_files
+        clean_intermediate_files = not args.keep_intermediate_files,
+        docking_engine = docking_engine,
+        unidock2_config = unidock2_config,
     )
 
     boltzina.run(ligand_files)

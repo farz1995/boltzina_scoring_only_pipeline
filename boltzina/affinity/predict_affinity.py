@@ -138,6 +138,6 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
     return trainer.predict(
         model_module,
         datamodule=data_module,
-        return_predictions=True,
+        return_predictions=False,
     )
 

@@ -5,6 +5,7 @@ import pickle
 import json
 import csv
 import copy
+import multiprocessing as mp
 import torch
 from tqdm import tqdm
 from pathlib import Path
@@ -18,6 +19,112 @@ Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
 from boltzina.data.parse.mmcif import parse_mmcif
 from boltzina.affinity.predict_affinity import load_boltz2_model, predict_affinity
 from boltz.main import get_cache_path
+
+
+# ---------------------------------------------------------------------------
+# Module-level worker functions (must be picklable for multiprocessing.Pool)
+# ---------------------------------------------------------------------------
+
+def _process_pose_worker(args):
+    """
+    Standalone CIF pipeline worker (pdb_chain → pdb_merge → maxit ×2).
+    Operates entirely on independent per-ligand files; no shared mutable state.
+    """
+    (pdb_file, ligand_output_dir, base_name,
+     receptor_pdb, ligand_chain_id, input_ligand_name,
+     base_ligand_name, vina_override) = args
+
+    pdb_file = Path(pdb_file)
+    ligand_output_dir = Path(ligand_output_dir)
+    receptor_pdb = Path(receptor_pdb)
+
+    docked_ligands_dir = ligand_output_dir / "docked_ligands"
+    docked_ligands_dir.mkdir(parents=True, exist_ok=True)
+
+    prep_file = docked_ligands_dir / f"{base_name}_prep.pdb"
+    complex_file = docked_ligands_dir / f"{base_name}_{ligand_chain_id}_complex.pdb"
+    complex_cif = docked_ligands_dir / f"{base_name}_{ligand_chain_id}_complex.cif"
+    complex_fix_cif = docked_ligands_dir / f"{base_name}_{ligand_chain_id}_complex_fix.cif"
+
+    if complex_fix_cif.exists() and not vina_override:
+        return True
+
+    try:
+        if input_ligand_name != base_ligand_name:
+            cmd1 = (f"pdb_chain -{ligand_chain_id} {pdb_file} | "
+                    f"pdb_rplresname -\"{input_ligand_name}\":{base_ligand_name} | "
+                    f"pdb_tidy > {prep_file}")
+        else:
+            cmd1 = f"pdb_chain -{ligand_chain_id} {pdb_file} | pdb_tidy > {prep_file}"
+        subprocess.run(cmd1, shell=True, check=True)
+
+        cmd2 = f"pdb_merge {receptor_pdb} {prep_file} | pdb_tidy > {complex_file}"
+        subprocess.run(cmd2, shell=True, check=True)
+
+        subprocess.run(
+            ["maxit", "-input", str(complex_file), "-output", str(complex_cif), "-o", "1"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["maxit", "-input", str(complex_cif), "-output", str(complex_fix_cif), "-o", "8"],
+            check=True, capture_output=True,
+        )
+        return True
+    except Exception as e:
+        print(f"  CIF pipeline error for {pdb_file}: {e}")
+        return False
+
+
+# Global state for _prepare_structure_worker (populated by fork initializer)
+_g_ccd = None
+_g_mol_dict = None
+_g_output_dir = None
+_g_fname_prefix = None
+_g_boltz_override = False
+
+
+def _prepare_structure_init(ccd, mol_dict, output_dir, fname_prefix, boltz_override):
+    global _g_ccd, _g_mol_dict, _g_output_dir, _g_fname_prefix, _g_boltz_override
+    _g_ccd = ccd
+    _g_mol_dict = mol_dict
+    _g_output_dir = output_dir
+    _g_fname_prefix = fname_prefix
+    _g_boltz_override = boltz_override
+
+
+def _prepare_structure_worker(args):
+    """
+    Worker for parse_mmcif. Uses global ccd/mol_dict shared via fork COW.
+    """
+    complex_file, pose_idx, ligand_idx = args
+    complex_file = Path(complex_file)
+    output_dir = Path(_g_output_dir)
+
+    fname = f"{_g_fname_prefix}_{ligand_idx}_{pose_idx}"
+    pose_output_dir = output_dir / "boltz_out" / "predictions" / fname
+    output_path = pose_output_dir / f"pre_affinity_{fname}.npz"
+
+    if output_path.exists() and not _g_boltz_override:
+        return fname
+
+    if not complex_file.exists():
+        return None
+
+    pose_output_dir.mkdir(parents=True, exist_ok=True)
+    extra_mols_dir = output_dir / "out" / str(ligand_idx) / "boltz_out" / "mols"
+
+    try:
+        parsed_structure = parse_mmcif(
+            path=str(complex_file),
+            mols=_g_ccd,
+            moldir=extra_mols_dir,
+            call_compute_interfaces=False,
+        )
+        parsed_structure.data.dump(output_path)
+        return fname if output_path.exists() else None
+    except Exception as e:
+        print(f"  parse_mmcif error for {complex_file}: {e}")
+        return None
 
 class Boltzina:
     def __init__(
@@ -51,6 +158,8 @@ class Boltzina:
         steering_args: Optional[dict] = None,
         diffusion_process_args: Optional[dict] = None,
         run_trunk_and_structure: bool = True, # Strongly recommended to be True
+        docking_engine: str = "vina",
+        unidock2_config: Optional[dict] = None,
     ):
         self.receptor_pdb = Path(receptor_pdb)
         self.output_dir = Path(output_dir)
@@ -80,6 +189,8 @@ class Boltzina:
         self.steering_args = steering_args
         self.diffusion_process_args = diffusion_process_args
         self.run_trunk_and_structure = run_trunk_and_structure
+        self.docking_engine = docking_engine
+        self.unidock2_config = unidock2_config or {}
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prepared_mols_file = prepared_mols_file
@@ -87,9 +198,12 @@ class Boltzina:
         self.vina_cpu = vina_cpu
 
         self.ligand_files = []
-        # Prepare receptor PDBQT file
+        # Prepare receptor PDBQT file (Vina only; Uni-Dock2 handles receptor internally)
         if not self.scoring_only:
-            self.receptor_pdbqt = self._prepare_receptor()
+            if self.docking_engine == "vina":
+                self.receptor_pdbqt = self._prepare_receptor()
+            else:
+                self.receptor_pdbqt = None
         else:
             self.receptor_pdbqt = self.receptor_pdb
 
@@ -172,7 +286,9 @@ class Boltzina:
         print(f"Docking {len(ligand_files)} ligands with {self.num_workers} workers...")
 
         if not self.skip_docking:
-            if self.num_workers == 1:
+            if self.docking_engine == "unidock2":
+                self._batch_dock_unidock2(prep_tasks)
+            elif self.num_workers == 1:
                 for task in tqdm(prep_tasks, desc="Preparing ligands"):
                     self._prepare_ligand(task)
             else:
@@ -218,8 +334,20 @@ class Boltzina:
         print(f"Preparing {len(structure_tasks)} structures with {self.num_workers} workers...")
         (self.output_dir / "boltz_out" / "processed").mkdir(parents=True, exist_ok=True)
 
-        for complex_file, pose_idx, ligand_idx in tqdm(structure_tasks, desc="Preparing structures"):
-            self._prepare_structure(complex_file, pose_idx, ligand_idx)
+        max_struct_workers = self.unidock2_config.get("n_pose_workers", os.cpu_count() or 48) if self.docking_engine == "unidock2" else 1
+        n_struct_workers = min(max_struct_workers, max(1, len(structure_tasks)))
+        worker_tasks = [(str(cf), pi, li) for cf, pi, li in structure_tasks]
+        ctx = mp.get_context("fork")
+        with ctx.Pool(
+            n_struct_workers,
+            initializer=_prepare_structure_init,
+            initargs=(self.ccd, self.mol_dict,
+                      str(self.output_dir), self.fname, self.boltz_override),
+        ) as pool:
+            list(tqdm(
+                pool.imap(_prepare_structure_worker, worker_tasks),
+                total=len(worker_tasks), desc="Preparing structures",
+            ))
 
         # clean CCD and mol_dict
         self.ccd = None
@@ -258,39 +386,224 @@ class Boltzina:
         if self.clean_intermediate_files:
             self._cleanup_scoring_intermediates()
 
-    def _prepare_ligand(self, task_data):
-        """Prepare ligand task for multiprocessing"""
-        idx, ligand_path, ligand_output_dir = task_data
+    def _batch_dock_unidock2(self, prep_tasks: list) -> None:
+        """
+        Run Uni-Dock2 docking for all ligands in one batch GPU call.
 
-        try:
-            ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
-            docked_pdbqt = ligand_output_dir / "docked.pdbqt"
-            if not docked_pdbqt.exists():
-                # Convert ligand to PDBQT format if needed
-                self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
+        Steps:
+        1. Convert each ligand PDB to SDF (keeping template mols for atom name restoration)
+        2. Run Uni-Dock2 once with ligand_batch mode
+        3. Split the combined output SDF back to individual PDBs with correct atom names
+        4. Run _process_pose() CIF pipeline for each pose
+        """
+        from unidock2_adapter import (
+            parse_vina_config,
+            pdb_to_sdf,
+            run_unidock2_batch,
+            split_batch_sdf_to_pdbs,
+        )
 
-                # Run Vina docking
-                self._run_vina(ligand_pdbqt, docked_pdbqt)
+        if not prep_tasks:
+            print("  No ligands to dock (all done).")
+            return
 
-            # Preprocess docked structures
-            self._preprocess_docked_structures(idx, docked_pdbqt)
+        print(f"  Batch docking {len(prep_tasks)} ligands with Uni-Dock2...")
 
-            # Clean up intermediate files (keep docked.pdbqt)
-            if self.clean_intermediate_files:
-                self._cleanup_vina_intermediates(ligand_output_dir)
+        # Parse center from Vina config
+        vina_params = parse_vina_config(self.config)
+        center = (
+            float(vina_params["center_x"]),
+            float(vina_params["center_y"]),
+            float(vina_params["center_z"]),
+        )
 
-            # Touch done file only on successful completion
+        # Step 1: Convert all PDBs to SDFs
+        template_mols = []
+        sdf_paths = []
+        valid_tasks = []  # tasks where PDB→SDF succeeded
+
+        for task_idx, (idx, ligand_path, ligand_output_dir) in enumerate(prep_tasks):
+            ligand_sdf = ligand_output_dir / "ligand.sdf"
+            try:
+                template_mol = pdb_to_sdf(ligand_path, ligand_sdf)
+                template_mols.append(template_mol)
+                sdf_paths.append(ligand_sdf)
+                valid_tasks.append((idx, ligand_path, ligand_output_dir))
+            except Exception as e:
+                print(f"  Warning: PDB→SDF conversion failed for {ligand_path} (idx={idx}): {e}")
+
+        if not template_mols:
+            print("  Error: no ligands could be converted to SDF, aborting batch docking.")
+            return
+
+        # Step 2: Run Uni-Dock2 batch
+        batch_output_sdf = self.output_dir / "batch_docked.sdf"
+        batch_work_dir = self.output_dir / "ud2_batch_work"
+        batch_work_dir.mkdir(parents=True, exist_ok=True)
+
+        run_unidock2_batch(
+            receptor_pdb=self.receptor_pdb,
+            ligand_sdf_list=sdf_paths,
+            center=center,
+            output_sdf=batch_output_sdf,
+            working_dir=batch_work_dir,
+            unidock2_config=self.unidock2_config,
+        )
+
+        # Step 3: Split combined SDF → per-ligand PDBs with atom names
+        output_dirs = [ligand_output_dir for _, _, ligand_output_dir in valid_tasks]
+        split_batch_sdf_to_pdbs(
+            docked_sdf_path=batch_output_sdf,
+            template_mols=template_mols,
+            output_dirs=output_dirs,
+            num_poses=self.num_boltz_poses,
+        )
+
+        # Step 4: CIF pipeline — parallel across all poses (independent files)
+        pose_tasks = []
+        pose_task_meta = []  # (ligand_path, ligand_output_dir) per pose_task
+        for idx, ligand_path, ligand_output_dir in valid_tasks:
+            docked_ligands_dir = ligand_output_dir / "docked_ligands"
+            for pose_idx_0 in range(self.num_boltz_poses):
+                pdb_file = docked_ligands_dir / f"docked_ligand_{pose_idx_0 + 1}.pdb"
+                if pdb_file.exists():
+                    pose_tasks.append((
+                        str(pdb_file),
+                        str(ligand_output_dir),
+                        f"docked_ligand_{pose_idx_0 + 1}",
+                        str(self.receptor_pdb),
+                        self.ligand_chain_id,
+                        self.input_ligand_name,
+                        self.base_ligand_name,
+                        self.vina_override,
+                    ))
+                    pose_task_meta.append((idx, ligand_path, ligand_output_dir))
+
+        max_cif_workers = self.unidock2_config.get("n_pose_workers", os.cpu_count() or 48)
+        n_workers = min(max_cif_workers, max(1, len(pose_tasks)))
+        print(f"  CIF pipeline: {len(pose_tasks)} poses with {n_workers} workers...")
+        if pose_tasks:
+            with Pool(n_workers) as pool:
+                results = list(tqdm(
+                    pool.imap(_process_pose_worker, pose_tasks),
+                    total=len(pose_tasks), desc="CIF pipeline",
+                ))
+
+        # Mark done (per ligand, if all poses succeeded)
+        for idx, ligand_path, ligand_output_dir in valid_tasks:
             (ligand_output_dir / "done").touch()
 
+        # Cleanup batch intermediates
+        if self.clean_intermediate_files:
+            self._cleanup_unidock2_batch_intermediates(output_dirs, sdf_paths)
+
+    def _cleanup_unidock2_batch_intermediates(self, output_dirs: list, sdf_paths: list) -> None:
+        """Clean up batch-level Uni-Dock2 intermediate files."""
+        batch_output_sdf = self.output_dir / "batch_docked.sdf"
+        batch_work_dir = self.output_dir / "ud2_batch_work"
+        for target in (batch_output_sdf, batch_work_dir):
+            try:
+                if target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+            except OSError:
+                pass
+        # Remove per-ligand ligand.sdf files
+        for sdf_path in sdf_paths:
+            try:
+                if Path(sdf_path).is_file():
+                    Path(sdf_path).unlink()
+            except OSError:
+                pass
+
+    def _prepare_ligand(self, task_data):
+        """Prepare ligand task for multiprocessing — dispatches to engine-specific method."""
+        idx, ligand_path, ligand_output_dir = task_data
+        try:
+            if self.docking_engine == "unidock2":
+                self._prepare_ligand_unidock2(idx, ligand_path, ligand_output_dir)
+            else:
+                self._prepare_ligand_vina(idx, ligand_path, ligand_output_dir)
+            (ligand_output_dir / "done").touch()
         except Exception as e:
             print(f"Error processing ligand {ligand_path} (idx={idx}): {e}")
-            # Remove done file if it exists (in case of partial failure)
             done_file = ligand_output_dir / "done"
             if done_file.exists():
                 try:
                     done_file.unlink()
                 except OSError:
                     pass
+
+    def _prepare_ligand_vina(self, idx: int, ligand_path: Path, ligand_output_dir: Path) -> None:
+        """Run Vina docking for a single ligand."""
+        ligand_pdbqt = ligand_output_dir / "ligand.pdbqt"
+        docked_pdbqt = ligand_output_dir / "docked.pdbqt"
+        if not docked_pdbqt.exists():
+            self._convert_to_pdbqt(ligand_path, ligand_pdbqt)
+            self._run_vina(ligand_pdbqt, docked_pdbqt)
+        self._preprocess_docked_structures(idx, docked_pdbqt)
+        if self.clean_intermediate_files:
+            self._cleanup_vina_intermediates(ligand_output_dir)
+
+    def _prepare_ligand_unidock2(self, idx: int, ligand_path: Path, ligand_output_dir: Path) -> None:
+        """Run Uni-Dock2 docking for a single ligand."""
+        from unidock2_adapter import (
+            parse_vina_config,
+            pdb_to_sdf,
+            run_unidock2,
+            split_docked_sdf_to_pdbs,
+        )
+
+        docked_ligands_dir = ligand_output_dir / "docked_ligands"
+        docked_sdf = ligand_output_dir / "docked.sdf"
+
+        if not docked_sdf.exists() or self.vina_override:
+            # Convert input PDB → SDF; template_mol has atom names and same atom order as SDF
+            ligand_sdf = ligand_output_dir / "ligand.sdf"
+            template_mol = pdb_to_sdf(ligand_path, ligand_sdf)
+
+            # Parse center from Vina config (reuse existing config format)
+            vina_params = parse_vina_config(self.config)
+            center = (
+                float(vina_params["center_x"]),
+                float(vina_params["center_y"]),
+                float(vina_params["center_z"]),
+            )
+
+            ud2_work_dir = ligand_output_dir / "ud2_work"
+            ud2_work_dir.mkdir(exist_ok=True)
+
+            run_unidock2(
+                receptor_pdb=self.receptor_pdb,
+                ligand_sdf=ligand_sdf,
+                center=center,
+                output_sdf=docked_sdf,
+                working_dir=ud2_work_dir,
+                unidock2_config=self.unidock2_config,
+            )
+        else:
+            # Docking already done; rebuild template_mol from original PDB for coord mapping
+            from rdkit import Chem as _Chem
+            template_mol = _Chem.MolFromPDBFile(str(ligand_path), removeHs=True, sanitize=True)
+            if template_mol is None:
+                template_mol = _Chem.MolFromPDBFile(str(ligand_path), removeHs=True, sanitize=False)
+
+        # Split multi-pose SDF → individual PDBs with correct atom names
+        pdb_files = split_docked_sdf_to_pdbs(
+            docked_sdf_path=docked_sdf,
+            template_mol=template_mol,
+            output_dir=docked_ligands_dir,
+            num_poses=self.num_boltz_poses,
+        )
+
+        # Process each pose through the shared CIF pipeline
+        for pose_idx_0, (pdb_file, _score) in enumerate(pdb_files):
+            base_name = f"docked_ligand_{pose_idx_0 + 1}"
+            self._process_pose(ligand_output_dir, base_name, pdb_file)
+
+        if self.clean_intermediate_files:
+            self._cleanup_unidock2_intermediates(ligand_output_dir)
 
     def _convert_to_pdbqt(self, input_file: Path, output_file: Path) -> None:
         if output_file.exists() and not self.vina_override:
@@ -535,6 +848,9 @@ class Boltzina:
             batch_size=self.batch_size,
             seed = self.seed,
         )
+        self.boltz_model = None
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def _extract_docking_score(self, docked_pdbqt: Path, pose_idx: int) -> Optional[float]:
         try:
@@ -556,6 +872,16 @@ class Boltzina:
         except:
             return None
 
+    def _extract_docking_score_unidock2(self, ligand_output_dir: Path, pose_idx: str) -> Optional[float]:
+        """Read Uni-Dock2 docking score from the saved JSON file."""
+        scores_path = ligand_output_dir / "unidock2_scores.json"
+        try:
+            with open(scores_path) as f:
+                scores = json.load(f)
+            return scores.get(str(pose_idx))
+        except Exception:
+            return None
+
     def _extract_results(self):
         results = []
         for ligand_idx, ligand_file in enumerate(self.ligand_files):
@@ -570,13 +896,43 @@ class Boltzina:
                 affinity["ligand_name"] = ligand_file
                 affinity["ligand_idx"] = ligand_idx
                 affinity["docking_rank"] = pose_idx
-                # Set docking score based on mode
+                # Set docking score based on mode and engine
                 if self.scoring_only:
                     affinity["docking_score"] = None
+                elif self.docking_engine == "unidock2":
+                    ligand_output_dir = self.output_dir / "out" / str(ligand_idx)
+                    affinity["docking_score"] = self._extract_docking_score_unidock2(ligand_output_dir, pose_idx)
                 else:
                     affinity["docking_score"] = self._extract_docking_score(self.output_dir / "out" / str(ligand_idx) / "docked.pdbqt", int(pose_idx))
                 results.append(affinity)
         self.results = results
+
+    def _cleanup_unidock2_intermediates(self, ligand_output_dir: Path) -> None:
+        """Clean up Uni-Dock2 intermediate files, keeping docked.sdf and unidock2_scores.json."""
+        for name in ("ligand.sdf", "ud2_work"):
+            target = ligand_output_dir / name
+            try:
+                if target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+            except OSError:
+                pass
+        docked_ligands_dir = ligand_output_dir / "docked_ligands"
+        if docked_ligands_dir.exists():
+            for file_path in docked_ligands_dir.iterdir():
+                keep = (
+                    file_path.name.endswith(f"_{self.ligand_chain_id}_complex_fix.cif")
+                    or file_path.name == "unidock2_scores.json"
+                )
+                if not keep:
+                    try:
+                        if file_path.is_file():
+                            file_path.unlink()
+                        elif file_path.is_dir():
+                            shutil.rmtree(file_path)
+                    except OSError:
+                        pass
 
     def _cleanup_vina_intermediates(self, ligand_output_dir: Path) -> None:
         """Clean up intermediate files after Vina docking, keeping docked.pdbqt"""
