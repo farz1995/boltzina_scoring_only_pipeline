@@ -1,0 +1,13 @@
+{
+    "work_dir": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/CDK2/boltz_results_base",
+    "vina_config": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_dry/vina_placeholder.txt",
+    "fname": "1ckp_cdk2",
+    "input_ligand_name": "UNL",
+    "ligand_chain_id": "B",
+    "output_dir": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_dry/results_scoring",
+    "scoring_only": true,
+    "receptor_pdb": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/CDK2/boltz_results_base/predictions/1ckp_cdk2/1ckp_cdk2_model_0_protein.pdb",
+    "ligand_files": [
+        "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_dry/input_pdbs_pose/1PYE_PM1_pose.pdb"
+    ]
+}

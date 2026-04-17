@@ -1,0 +1,13 @@
+{
+    "work_dir": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/boltz_results_1HVR_boltz_input",
+    "vina_config": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/vina_placeholder.txt",
+    "fname": "1HVR_boltz_input",
+    "input_ligand_name": "UNL",
+    "ligand_chain_id": "B",
+    "output_dir": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/results_scoring",
+    "scoring_only": true,
+    "receptor_pdb": "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/receptor_from_complex.pdb",
+    "ligand_files": [
+        "/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/input_pdbs_pose/1HVR_AUTO_pose.pdb"
+    ]
+}

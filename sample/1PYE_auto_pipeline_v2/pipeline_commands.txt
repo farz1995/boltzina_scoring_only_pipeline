@@ -1,0 +1,2 @@
+boltz predict /cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_pipeline_v2/1PYE_boltz_input.yaml --out_dir /cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_pipeline_v2 --use_msa_server
+python run.py /cluster/VAST/zoux-lab/Farzana/boltzina/sample/1PYE_auto_pipeline_v2/config_scoring_1PYE.json --batch_size 1

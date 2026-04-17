@@ -1,0 +1,2 @@
+boltz predict /cluster/VAST/zoux-lab/Farzana/boltzina/sample/6MX3_auto_pipeline/6MX3_boltz_input.yaml --out_dir /cluster/VAST/zoux-lab/Farzana/boltzina/sample/6MX3_auto_pipeline --use_msa_server
+python run.py /cluster/VAST/zoux-lab/Farzana/boltzina/sample/6MX3_auto_pipeline/config_scoring_6MX3.json --batch_size 1

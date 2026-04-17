@@ -1,7 +1,9 @@
 from pathlib import Path
 from dataclasses import asdict
+import torch
 from boltz.main import Boltz2DiffusionParams, PairformerArgsV2, MSAModuleArgs, get_cache_path
 from pytorch_lightning import Trainer, seed_everything
+from lightning_fabric.utilities.exceptions import MisconfigurationException
 from boltz.data.types import Manifest
 
 from boltzina.model.models.boltz2 import Boltz2
@@ -127,14 +129,39 @@ def predict_affinity(out_dir, model_module=None, output_dir = None, structures_d
         batch_size=batch_size,
     )
 
-    trainer = Trainer(
-        default_root_dir=out_dir,
-        strategy=strategy,
-        callbacks=[pred_writer],
-        accelerator=accelerator,
-        devices=devices,
-        precision=32 if model == "boltz1" else "bf16-mixed",
-    )
+    requested_gpu = accelerator == "gpu"
+    cuda_ok = torch.cuda.is_available()
+    resolved_accelerator = accelerator
+    resolved_devices = devices
+    if requested_gpu and not cuda_ok:
+        print("GPU accelerator requested but CUDA is not available. Falling back to CPU for affinity prediction.")
+        resolved_accelerator = "cpu"
+        resolved_devices = 1
+
+    use_bf16 = (model != "boltz1") and (resolved_accelerator == "gpu")
+    resolved_precision = "bf16-mixed" if use_bf16 else 32
+
+    try:
+        trainer = Trainer(
+            default_root_dir=out_dir,
+            strategy=strategy,
+            callbacks=[pred_writer],
+            accelerator=resolved_accelerator,
+            devices=resolved_devices,
+            precision=resolved_precision,
+        )
+    except MisconfigurationException:
+        if resolved_accelerator != "gpu":
+            raise
+        print("Lightning GPU backend initialization failed. Retrying affinity prediction on CPU.")
+        trainer = Trainer(
+            default_root_dir=out_dir,
+            strategy=strategy,
+            callbacks=[pred_writer],
+            accelerator="cpu",
+            devices=1,
+            precision=32,
+        )
     return trainer.predict(
         model_module,
         datamodule=data_module,

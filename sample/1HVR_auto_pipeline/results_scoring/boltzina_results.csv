@@ -1,0 +1,2 @@
+ligand_name,ligand_idx,docking_rank,docking_score,affinity_pred_value,affinity_probability_binary,affinity_pred_value1,affinity_probability_binary1,affinity_pred_value2,affinity_probability_binary2
+/cluster/VAST/zoux-lab/Farzana/boltzina/sample/1HVR_auto_pipeline/input_pdbs_pose/1HVR_AUTO_pose.pdb,0,1,,2.6721081733703613,0.10112501680850983,3.1024622917175293,0.05292101204395294,2.2417540550231934,0.1493290215730667

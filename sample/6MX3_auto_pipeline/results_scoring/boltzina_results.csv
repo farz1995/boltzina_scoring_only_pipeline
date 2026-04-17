@@ -1,0 +1,2 @@
+ligand_name,ligand_idx,docking_rank,docking_score,affinity_pred_value,affinity_probability_binary,affinity_pred_value1,affinity_probability_binary1,affinity_pred_value2,affinity_probability_binary2
+/cluster/VAST/zoux-lab/Farzana/boltzina/sample/6MX3_auto_pipeline/input_pdbs_pose/6MX3_AUTO_pose.pdb,0,1,,0.5864169001579285,0.36905720829963684,1.3636819124221802,0.03707278519868851,-0.19084806740283966,0.7010416388511658

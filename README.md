@@ -1,98 +1,150 @@
-# Boltzina
-![png](https://arxiv.org/html/2508.17555v1/x1.png)
-Boltzina is a pipeline that combines AutoDock Vina docking with Boltz-2 scoring for molecular docking and affinity prediction.
+# Boltzina Scoring-Only Pipeline
 
-## Installation
+This repository is for running scoring-only affinity prediction from a crystal complex PDB using
+`auto_scoring_pipeline.py`.
+
+## Scope
+
+This README only covers **scoring-only usage**.
+
+- no docking is executed by default
+- no AutoDock Vina is required for scoring mode
+- input is a crystal complex PDB (`--complex-pdb`)
+
+## What you need
+
+- Python 3.10 to 3.12
+- Linux shell (preferred) or Windows PowerShell
+- Boltz-2 Python package and model files
+- `maxit`, `pdb_chain`, `pdb_merge`, `pdb_tidy`, `pdb_rplresname`
+
+## Install (once)
+
+### 1) Python package and Boltz models
+
+Linux / WSL:
 
 ```bash
-# Using uv (recommended)
-uv venv
-uv sync
-
-# Or using pip
+python -m venv .venv
+source .venv/bin/activate
 pip install .
+python setup_boltzina.py
 ```
 
-Related environments including AutoDock Vina, Maxit, and Boltz-2 model checkpoint files can be installed with the following command:
+PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install .
+pip install rdkit-pypi
+python setup_boltzina.py
+```
+
+### 2) External tools
+
+Run the provided installer script if you are on Linux/WSL:
+
 ```bash
 ./setup.sh
 ```
 
+That script installs MAXIT and a Vina binary. For scoring-only, Vina is optional and can be skipped.
+What is required is `maxit` and the four pdb-tools executables.
 
-## Modes
-
-Boltzina supports two operation modes:
-
-1. **Full docking mode**: Performs AutoDock Vina docking followed by Boltz-2 scoring
-2. **Scoring-only mode**: Scores pre-existing ligand poses using only Boltz-2 (no docking)
-
-## Usage
-
-Run the pipeline using a configuration file:
+If `pdb_chain`, `pdb_merge`, `pdb_tidy`, `pdb_rplresname` are missing, install them separately:
 
 ```bash
-python run.py sample/CDK2/config.json
+pip install pdb-tools
 ```
 
-Example for scoring mode:
+After install, make sure tools are on `PATH`.
+
+Linux / WSL:
+
 ```bash
-python run.py sample/CDK2/config_scoring.json
+export RCSBROOT=<path-to-repo>/maxit-v11.300-prod-src
+export PATH=$PATH:$RCSBROOT/bin
+export PATH=$PATH:<path-to-repo>/bin
 ```
 
-## Ligand File Format
-To generate a Boltzina-compatible input PDB file and a mols_dict pkl from SMILES, follow the steps below:
+PowerShell:
+
+```powershell
+$env:RCSBROOT = "C:\path\to\boltzina\maxit-v11.300-prod-src"
+$env:Path = "$env:Path;$env:RCSBROOT\bin;$PWD\bin"
+```
+
+## Run scoring pipeline
+
+From repository root:
+
+Linux / WSL:
+
 ```bash
-# Prepare ligand PDB Files
-$ python ligand_preparation.py preparation_sample/input_smiles.txt --output_dir preparation_sample
-# Run Boltzina
-$ python run.py preparation_sample/config.json
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb
 ```
 
-For input file formats, please refer to `INPUT_FORMAT.md`.
+PowerShell:
 
-## Command Line Options
-
-- `config`: Path to configuration JSON file (required)
-- `--batch_size`: Batch size for Boltz-2 scoring (default: 1, strongly recommended)
-- `--num_workers`: Number of workers for AutoDock Vina (default: 1)
-- `--vina_override`: Override existing AutoDock Vina results
-- `--boltz_override`: Override existing Boltz-2 scoring results
-
-## Configuration File Format
-
-The configuration file should be a JSON file with the following required fields:
-
-```json
-{
-    "work_dir": "sample/CDK2/boltz_results_base",
-    "vina_config": "sample/CDK2/input.txt",
-    "fname": "1ckp_cdk2",
-    "input_ligand_name": "UNL",
-    "output_dir": "sample/CDK2/results",
-    "receptor_pdb": "sample/CDK2/boltz_results_base/predictions/1ckp_cdk2/1ckp_cdk2_model_0_protein.pdb",
-    "ligand_files": [
-        "sample/CDK2/input_pdbs/CDK2_active_0.pdb",
-        "sample/CDK2/input_pdbs/CDK2_active_1.pdb"
-    ]
-}
+```powershell
+python auto_scoring_pipeline.py --complex-pdb .\sample\1PYE.pdb
 ```
 
-Before running boltzina, you need to run Boltz-2 to create `manifest.json` and `constraints`.
-For example, run the following:
+Default output:
+
+- `sample/<complex_stem>_auto_pipeline`
+
+Generated in that folder:
+
+- ligand pose file
+- `<complex>_boltz_input.yaml`
+- `<complex>_scoring_*.json`
+- `pipeline_commands.txt`
+- `results_scoring/` with result CSVs
+
+## Common run options
+
+Run Boltz + scoring (default):
+
 ```bash
-boltz predict sample/CDK2/base.yaml --out_dir sample/CDK2 --use_msa_server
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb
 ```
-You need to specify the output directory `sample/CDK2/boltz_results_base` as `work_dir`.
 
-### Configuration Parameters
+Use existing Boltz output (skip `boltz predict`):
 
-- **`work_dir`**: You need to specify the output directory of Boltz-2.
-- **`vina_config`**: Path to AutoDock Vina configuration file (contains binding site coordinates)
-- **`fname`**: Base filename for output files
-- **`input_ligand_name`**: Name of the ligand in the input files
-- **`output_dir`**: Directory where final results will be saved
-- **`receptor_pdb`**: Path to the receptor PDB file
-- **`ligand_files`**: Array of paths to ligand files (Now only supports PDB format)
+```bash
+python auto_scoring_pipeline.py `
+  --complex-pdb sample/1PYE.pdb `
+  --no-run-boltz `
+  --work-dir sample/1PYE_boltz_results `
+  --fname 1PYE_boltz_input
+```
 
-## Reference
-Furui, K, & Ohue, M. Boltzina: Efficient and Accurate Virtual Screening via Docking-Guided Binding Prediction with Boltz-2. AI for Accelerated Materials Design - NeurIPS 2025. https://openreview.net/forum?id=OwtEQsd2hN
+Dry run only:
+
+```bash
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --no-run-boltz --no-run-scoring --dry-run
+```
+
+Speed tuning:
+
+```bash
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --batch-size 2
+```
+
+## Validate CLI
+
+```bash
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --help
+```
+
+## Notes for a clean scoring-only install
+
+- `bin/vina` and Vina-specific setup are optional for this mode.
+- Keep only these essentials for scoring:
+  - project source
+  - `auto_scoring_pipeline.py`
+  - Boltz install + model cache
+  - external `maxit`/pdb-tools commands
+- You can remove large generated artifacts (bytecode, build folders, and installer outputs) when not needed.
