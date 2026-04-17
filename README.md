@@ -1,150 +1,107 @@
-# Boltzina Scoring-Only Pipeline
+# Boltzina (Scoring-Only)
 
-This repository is for running scoring-only affinity prediction from a crystal complex PDB using
-`auto_scoring_pipeline.py`.
+This repository runs **scoring-only** Boltz-2 evaluation from crystal complex PDB files using `auto_scoring_pipeline.py`.
 
-## Scope
+- Docking is skipped by default.
+- One or more input PDB files are supported.
+- The output is written separately for each complex.
 
-This README only covers **scoring-only usage**.
+## Quick install
 
-- no docking is executed by default
-- no AutoDock Vina is required for scoring mode
-- input is a crystal complex PDB (`--complex-pdb`)
+1. Create and activate a conda environment
+```
+conda create -n boltzina-scoring python=3.11 -y
+conda activate boltzina-scoring
+```
 
-## What you need
-
-- Python 3.10 to 3.12
-- Linux shell (preferred) or Windows PowerShell
-- Boltz-2 Python package and model files
-- `maxit`, `pdb_chain`, `pdb_merge`, `pdb_tidy`, `pdb_rplresname`
-
-## Install (once)
-
-### 1) Python package and Boltz models
-
-Linux / WSL:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
+2. Install the package
+```
 pip install .
+```
+
+3. Download Boltz model files
+```
 python setup_boltzina.py
 ```
 
-PowerShell:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install .
-pip install rdkit-pypi
-python setup_boltzina.py
+4. Install Boltz-2 dependencies
 ```
-
-### 2) External tools
-
-Run the provided installer script if you are on Linux/WSL:
-
-```bash
 ./setup.sh
 ```
 
-That script installs MAXIT and a Vina binary. For scoring-only, Vina is optional and can be skipped.
-What is required is `maxit` and the four pdb-tools executables.
 
-If `pdb_chain`, `pdb_merge`, `pdb_tidy`, `pdb_rplresname` are missing, install them separately:
-
-```bash
-pip install pdb-tools
+5. Install additional Python tools
+```
+pip install rdkit-pypi pdb-tools
 ```
 
-After install, make sure tools are on `PATH`.
+6. Install/enable external Boltzina dependencies
+- `maxit`
+- `pdb_chain`, `pdb_merge`, `pdb_tidy`, `pdb_rplresname`
 
-Linux / WSL:
+If these tools are not already on `PATH`, add their directories manually.
 
-```bash
-export RCSBROOT=<path-to-repo>/maxit-v11.300-prod-src
-export PATH=$PATH:$RCSBROOT/bin
-export PATH=$PATH:<path-to-repo>/bin
+## Run scoring on one or more complexes
+
+Basic usage:
+
+```
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb sample/1HVR.pdb
 ```
 
-PowerShell:
+`--complex-pdb` accepts one or more PDB paths.
 
-```powershell
-$env:RCSBROOT = "C:\path\to\boltzina\maxit-v11.300-prod-src"
-$env:Path = "$env:Path;$env:RCSBROOT\bin;$PWD\bin"
+### Optional flags
+
+- Run Boltz structure generation and scoring (default)
+```
+python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb sample/1HVR.pdb
 ```
 
-## Run scoring pipeline
-
-From repository root:
-
-Linux / WSL:
-
-```bash
-python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb
+- Skip Boltz prediction and use existing Boltz work directory (one run at a time)
 ```
-
-PowerShell:
-
-```powershell
-python auto_scoring_pipeline.py --complex-pdb .\sample\1PYE.pdb
-```
-
-Default output:
-
-- `sample/<complex_stem>_auto_pipeline`
-
-Generated in that folder:
-
-- ligand pose file
-- `<complex>_boltz_input.yaml`
-- `<complex>_scoring_*.json`
-- `pipeline_commands.txt`
-- `results_scoring/` with result CSVs
-
-## Common run options
-
-Run Boltz + scoring (default):
-
-```bash
-python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb
-```
-
-Use existing Boltz output (skip `boltz predict`):
-
-```bash
-python auto_scoring_pipeline.py `
-  --complex-pdb sample/1PYE.pdb `
-  --no-run-boltz `
-  --work-dir sample/1PYE_boltz_results `
+python auto_scoring_pipeline.py \
+  --complex-pdb sample/1PYE.pdb \
+  --no-run-boltz \
+  --work-dir sample/1PYE_boltz_results \
   --fname 1PYE_boltz_input
 ```
 
-Dry run only:
-
-```bash
-python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --no-run-boltz --no-run-scoring --dry-run
+- Dry run (generate files and command log only)
+```
+python auto_scoring_pipeline.py \
+  --complex-pdb sample/1PYE.pdb sample/1HVR.pdb \
+  --no-run-boltz \
+  --no-run-scoring \
+  --dry-run
 ```
 
-Speed tuning:
-
-```bash
+- Change batch size
+```
 python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --batch-size 2
 ```
 
-## Validate CLI
+### Output layout
 
-```bash
-python auto_scoring_pipeline.py --complex-pdb sample/1PYE.pdb --help
-```
+- `sample/<complex_stem>_auto_pipeline/` when `--project-dir` is not set
+- `--project-dir` (single input): uses this exact directory
+- `--project-dir` + `<complex_stem>_auto_pipeline` (multiple inputs)
 
-## Notes for a clean scoring-only install
+Each run creates:
 
-- `bin/vina` and Vina-specific setup are optional for this mode.
-- Keep only these essentials for scoring:
-  - project source
-  - `auto_scoring_pipeline.py`
-  - Boltz install + model cache
-  - external `maxit`/pdb-tools commands
-- You can remove large generated artifacts (bytecode, build folders, and installer outputs) when not needed.
+- `<complex>_pose.pdb`
+- `<complex>_boltz_input.yaml`
+- `config_scoring_<complex>.json`
+- `pipeline_commands.txt`
+- `results_scoring/` (scored results)
+
+## Important notes
+
+- `--work-dir` and `--fname` are for single-complex workflows only.
+- For multiple input PDB files, omit both and let each complex resolve its own `fname` from Boltz output.
+- Keep paths short to avoid command-line parsing issues.
+
+## Reference
+
+Furui, K, & Ohue, M. Boltzina: Efficient and Accurate Virtual Screening via Docking-Guided Binding Prediction with Boltz-2. AI for Accelerated Materials Design - NeurIPS 2025.
+https://openreview.net/forum?id=OwtEQsd2hN
