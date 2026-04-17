@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Single-command scoring-only pipeline bootstrap for Boltzina.
 
-This script automates the manual preparation steps for scoring-only mode.
+This script automates the manual preparation steps for scoring-only mode from
+one or more complex PDB files.
 It can run in dry-run mode to only create files/plan commands, or execute
 external commands (`boltz predict`, `python run.py ...`) when requested.
 """
@@ -431,49 +432,13 @@ def _write_receptor_from_complex(complex_pdb: Path, output_pdb: Path) -> int:
     return len(atom_lines)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Automate Boltzina scoring-only preparation from a complex PDB."
-    )
-    parser.add_argument("--complex-pdb", required=True, help="Input crystal complex PDB path")
-    parser.add_argument("--ligand-resname", default=None, help="Optional ligand residue name override in complex (e.g., PM1)")
-    parser.add_argument("--ligand-chain", default=None, help="Optional ligand chain filter in complex")
-    parser.add_argument("--ligand-resseq", default=None, help="Optional ligand residue sequence id filter")
-    parser.add_argument("--ligand-smiles", default=None, help="Optional ligand SMILES override for Boltz YAML")
-    parser.add_argument("--project-dir", default=None, help="Pipeline output root directory (default: sample/<complex_stem>_auto_pipeline)")
-    parser.add_argument("--protein-chain", default=None, help="Protein chain id; auto-detects largest ATOM chain if omitted")
-    parser.add_argument("--protein-sequence", default=None, help="Protein sequence; auto-extracted from ATOM if omitted")
-    parser.add_argument("--boltz-ligand-chain", default="B", help="Ligand chain id used in Boltz YAML and config")
-    parser.add_argument("--input-ligand-name", default="UNL", help="Ligand residue name expected by Boltzina")
-    parser.add_argument("--work-dir", default=None, help="Existing Boltz work_dir; skip discovery when set")
-    parser.add_argument("--fname", default=None, help="Boltz record id; defaults to manifest first record id")
-    parser.add_argument(
-        "--run-boltz",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Run `boltz predict` after writing YAML (default: true)",
-    )
-    parser.add_argument("--boltz-out-dir", default=None, help="Boltz --out_dir (default: <project-dir>)")
-    parser.add_argument("--build-mol-pkl", action="store_true", help="Create prepared_mols.pkl from ligand pose")
-    parser.add_argument(
-        "--run-scoring",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Run `python run.py <config>` at the end (default: true)",
-    )
-    parser.add_argument("--batch-size", type=int, default=1, help="Batch size used when running run.py")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands and create files only")
-
-    args = parser.parse_args()
-
-    complex_pdb = Path(args.complex_pdb).resolve()
-    if not complex_pdb.exists():
-        raise PipelineError(f"Complex PDB not found: {complex_pdb}")
-
-    default_project_dir = Path("sample") / f"{complex_pdb.stem}_auto_pipeline"
-    project_dir = Path(args.project_dir).resolve() if args.project_dir else default_project_dir.resolve()
-    project_dir.mkdir(parents=True, exist_ok=True)
-
+def _run_single_complex(
+    complex_pdb: Path,
+    project_dir: Path,
+    args: argparse.Namespace,
+    tool_status: Optional[Dict[str, bool]] = None,
+) -> None:
+    """Run the full auto-scoring preparation + scoring flow for one complex."""
     lines = _load_lines(complex_pdb)
     protein_chain = args.protein_chain or _detect_primary_protein_chain(lines)
     protein_sequence = args.protein_sequence or _extract_chain_sequence_from_atom(lines, protein_chain)
@@ -503,7 +468,6 @@ def main() -> None:
     )
 
     boltz_out_dir = Path(args.boltz_out_dir).resolve() if args.boltz_out_dir else project_dir
-
     commands: List[List[str]] = []
 
     if args.run_boltz:
@@ -511,7 +475,9 @@ def main() -> None:
             "boltz", "predict", str(yaml_path), "--out_dir", str(boltz_out_dir), "--use_msa_server"
         ])
 
-    tool_status = _check_required_tools(run_boltz=args.run_boltz)
+    if tool_status is None:
+        tool_status = _check_required_tools(run_boltz=args.run_boltz)
+
     missing = [name for name, ok in tool_status.items() if not ok]
     if missing:
         print("Missing tools on PATH:", ", ".join(missing))
@@ -567,6 +533,7 @@ def main() -> None:
     _write_command_log(project_dir / "pipeline_commands.txt", commands)
 
     print("\nPipeline artifacts created:")
+    print(f"  Input complex     : {complex_pdb}")
     print(f"  Selected ligand   : {selected_resname} chain {selected_chain} resseq {selected_resseq}")
     print(f"  Ligand SMILES     : {ligand_smiles}")
     print(f"  Ligand atoms      : {atom_count}")
@@ -583,6 +550,88 @@ def main() -> None:
     print("\nTool checks:")
     for name, ok in tool_status.items():
         print(f"  {name:14} {'OK' if ok else 'MISSING'}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Automate Boltzina scoring-only preparation from a complex PDB."
+    )
+    parser.add_argument(
+        "--complex-pdb",
+        nargs="+",
+        required=True,
+        help="Input crystal complex PDB paths. Example: --complex-pdb a.pdb b.pdb c.pdb"
+    )
+    parser.add_argument("--ligand-resname", default=None, help="Optional ligand residue name override in complex (e.g., PM1)")
+    parser.add_argument("--ligand-chain", default=None, help="Optional ligand chain filter in complex")
+    parser.add_argument("--ligand-resseq", default=None, help="Optional ligand residue sequence id filter")
+    parser.add_argument("--ligand-smiles", default=None, help="Optional ligand SMILES override for Boltz YAML")
+    parser.add_argument("--project-dir", default=None, help="Pipeline output root directory (default: sample/<complex_stem>_auto_pipeline)")
+    parser.add_argument("--protein-chain", default=None, help="Protein chain id; auto-detects largest ATOM chain if omitted")
+    parser.add_argument("--protein-sequence", default=None, help="Protein sequence; auto-extracted from ATOM if omitted")
+    parser.add_argument("--boltz-ligand-chain", default="B", help="Ligand chain id used in Boltz YAML and config")
+    parser.add_argument("--input-ligand-name", default="UNL", help="Ligand residue name expected by Boltzina")
+    parser.add_argument("--work-dir", default=None, help="Existing Boltz work_dir; skip discovery when set")
+    parser.add_argument("--fname", default=None, help="Boltz record id; defaults to manifest first record id")
+    parser.add_argument(
+        "--run-boltz",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run `boltz predict` after writing YAML (default: true)",
+    )
+    parser.add_argument("--boltz-out-dir", default=None, help="Boltz --out_dir (default: <project-dir>)")
+    parser.add_argument("--build-mol-pkl", action="store_true", help="Create prepared_mols.pkl from ligand pose")
+    parser.add_argument(
+        "--run-scoring",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run `python run.py <config>` at the end (default: true)",
+    )
+    parser.add_argument("--batch-size", type=int, default=1, help="Batch size used when running run.py")
+    parser.add_argument("--dry-run", action="store_true", help="Print commands and create files only")
+
+    args = parser.parse_args()
+
+    complex_pdbs = [Path(path).resolve() for path in args.complex_pdb]
+    for complex_pdb in complex_pdbs:
+        if not complex_pdb.exists():
+            raise PipelineError(f"Complex PDB not found: {complex_pdb}")
+
+    if len(complex_pdbs) > 1 and (args.work_dir is not None or args.fname is not None):
+        raise PipelineError(
+            "When providing multiple --complex-pdb files, omit --work-dir and --fname. "
+            "These values can be defined per complex from each Boltz output."
+        )
+
+    explicit_tool_check = _check_required_tools(run_boltz=args.run_boltz)
+    missing = [name for name, ok in explicit_tool_check.items() if not ok]
+    if missing:
+        print("Missing tools on PATH:", ", ".join(missing))
+        if args.run_boltz and "boltz" in missing:
+            raise PipelineError("Cannot run Boltz because `boltz` is not on PATH.")
+    base_project_dir = Path(args.project_dir).resolve() if args.project_dir else None
+
+    used_names: Dict[str, int] = {}
+    for complex_pdb in complex_pdbs:
+        if base_project_dir is not None:
+            if len(complex_pdbs) == 1:
+                project_dir = base_project_dir
+            else:
+                project_name = f"{complex_pdb.stem}_auto_pipeline"
+                used_index = used_names.get(project_name, 0) + 1
+                used_names[project_name] = used_index
+                if used_index > 1:
+                    project_name = f"{project_name}_{used_index}"
+                project_dir = base_project_dir / project_name
+        else:
+            project_name = f"{complex_pdb.stem}_auto_pipeline"
+            used_index = used_names.get(project_name, 0) + 1
+            used_names[project_name] = used_index
+            if used_index > 1:
+                project_name = f"{project_name}_{used_index}"
+            project_dir = Path("sample") / project_name
+
+        _run_single_complex(complex_pdb, project_dir, args, tool_status=explicit_tool_check)
 
 
 if __name__ == "__main__":
